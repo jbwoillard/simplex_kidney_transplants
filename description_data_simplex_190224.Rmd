@@ -1,0 +1,163 @@
+---
+title: "descriptive statistic simplex"
+author: "jbw"
+date: "2024-08-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tableone)
+library(tidyverse)
+```
+
+Loading of the data test, train and valid for descriptions
+
+```{r}
+library(readr)
+testset <- read_csv("test_X_oslo20240812.csv") %>% select(-contains("STD")) %>% mutate (type = "testset") %>% mutate(REC_PROT_ = if_else(REC_PROT_== -100,NA,REC_PROT_)) %>% 
+  mutate(MAINTENANCE_CNI_ = if_else(MAINTENANCE_CNI_>0,1,0),
+         MAINTENANCE_SRD_= if_else(MAINTENANCE_SRD_>0,1,0))
+train <- read_csv("train_X_oslo20240812.csv") %>% select(-contains("STD")) %>% mutate (type = "train") %>% mutate(REC_PROT_ = if_else(REC_PROT_== -100,NA,REC_PROT_))%>% 
+  mutate(MAINTENANCE_CNI_ = if_else(MAINTENANCE_CNI_>0,1,0),
+         MAINTENANCE_SRD_= if_else(MAINTENANCE_SRD_>0,1,0))
+valid <- read_csv("valid_X_oslo20240812.csv") %>% select(-contains("STD")) %>% mutate (type = "valid")%>% mutate(REC_PROT_ = if_else(REC_PROT_== -100,NA,REC_PROT_))%>% 
+  mutate(MAINTENANCE_CNI_ = if_else(MAINTENANCE_CNI_>0,1,0),
+         MAINTENANCE_SRD_= if_else(MAINTENANCE_SRD_>0,1,0))
+
+```
+
+Extraction slope for valid dataset to select the 10% of the patients with the steepest slope
+
+```{r}
+slope_base_valid <- valid %>% 
+  filter(MONTHS==12 | MONTHS==24) %>% 
+  filter(DFG_>0) %>% 
+  group_by(ID_TRANSPLANTATION_INT) %>% 
+  mutate(count = n()) %>% 
+  filter(count==2) %>% 
+  select(-index, -MAINTENANCE_CNI_:-MAINTENANCE_SRD_) %>% 
+  pivot_wider(names_from = MONTHS, values_from = DFG_,names_prefix = "month_") %>% 
+  mutate(slope = (month_12 - month_24)/month_24 ) %>%
+  select(id_transplantation = ID_TRANSPLANTATION_INT,don_age = DON_AGE_, rec_age  = REC_AGE_, CIT = CIT_, slope)
+write.csv(slope_base_valid, file = "slope_base_valid_120824.csv")
+
+```
+
+
+Description number of visit per patient median min max
+
+```{r}
+# Combine the test, train, and validation datasets into one large dataset
+# Then group by ID_TRANSPLANTATION_INT to summarize the number of records per transplant
+combined_data <- testset %>% 
+  bind_rows(train) %>%             # Bind rows from test, train, and valid datasets into one dataset
+  bind_rows(valid) %>% 
+  group_by(ID_TRANSPLANTATION_INT) %>%  # Group data by transplantation ID
+  summarise(n = n()) %>%           # Count the number of records for each transplant
+  summarise(                       # Summarize the statistics across all transplants
+    median_n = median(n),          # Calculate the median number of records per transplant
+    min_n = min(n),                # Find the minimum number of records per transplant
+    max_n = max(n),                # Find the maximum number of records per transplant
+    n = n()                        # Count the total number of transplants
+  )
+
+# Combine the datasets and clean up the column names
+# Group by id_transplantation_int and summarize the median 'months' for each transplant
+month_summary_per_id <- testset %>% 
+  bind_rows(train) %>% 
+  bind_rows(valid) %>% 
+  janitor::clean_names() %>%       # Clean column names to ensure they are syntactically valid in R
+  group_by(id_transplantation_int) %>%  # Group data by transplantation ID
+  summarise(median_per_id = median(months)) %>%  # Calculate the median 'months' for each transplant
+  summarise(                       # Summarize the 'months' statistics across all transplants
+    median_month = median(median_per_id),  # Calculate the median of the medians across all transplants
+    min_months = min(median_per_id),       # Find the minimum median 'months' value
+    max_months = max(median_per_id),       # Find the maximum median 'months' value
+    n = n()                                # Count the total number of transplants
+  )
+
+# Combine the datasets, clean the column names, and summarize the overall statistics for 'months'
+month_summary_overall <- testset %>% 
+  bind_rows(train) %>% 
+  bind_rows(valid) %>% 
+  janitor::clean_names() %>%       # Clean column names
+  summarise(                       # Summarize the overall 'months' statistics
+    median_month_overall = median(months),  # Calculate the overall median of 'months'
+    min_months_overall = min(months),       # Find the overall minimum 'months' value
+    max_months_overall = max(months),       # Find the overall maximum 'months' value
+    n = n()                                # Count the total number of records
+  )
+
+```
+
+
+## description dataset train and test and val all (per sequence and not per patient)
+
+```{r comparaison dataset all visits}
+#cut the 2 variables with their names
+simplex_des<-full_join(train,testset) %>% full_join(valid) %>% ungroup()
+
+#recuperation des noms
+# dput(names((simplex_des)))
+## Vector of categorical variables that need transformation
+catVars <- c( "LIVING_", "MAINTENANCE_CNI_","MAINTENANCE_MPS_MMF_", "MAINTENANCE_MTOR_", "MAINTENANCE_AZA_", 
+ "MAINTENANCE_SRD_", "ARE_01", "type")
+## Create a variable list.
+vars <- c( "MONTHS", "DFG_", "LIVING_", "MAINTENANCE_CNI_",
+"MAINTENANCE_MPS_MMF_", "MAINTENANCE_MTOR_", "MAINTENANCE_AZA_", 
+"REC_PROT_", "MAINTENANCE_SRD_", "DON_AGE_", "REC_AGE_", "CIT_", 
+"PRA1_", "PRA2_", "RANK_", "ARE_01")
+tableOne <- CreateTableOne(vars = vars, strata = "type",factorVars = catVars, data = simplex_des)
+tableOne2<-print(tableOne, nonnormal = c("MONTHS", "DFG_", "REC_PROT_", "DON_AGE_", "REC_AGE_", "CIT_", 
+"PRA1_", "PRA2_", "RANK_"), printToggle=F, minMax=T)
+tableOne2b<-print(tableOne, nonnormal = c("MONTHS", "DFG_", "REC_PROT_", "DON_AGE_", "REC_AGE_", "CIT_", 
+"PRA1_", "PRA2_", "RANK_"), printToggle=F, minMax=F)
+
+```
+
+```{r , echo=F}
+kableone(tableOne2)
+kableone(tableOne2b)
+```
+
+## description of train and test and val dataset at the first visit per patient
+
+```{r comparaison dataset last visite per patient}
+#cut the 2 variables with their names
+simplex_des_last_visite <-full_join(train,testset) %>% full_join(valid) %>% group_by(as.factor(ID_TRANSPLANTATION_INT)) %>% slice_min(MONTHS)
+
+#recuperation des noms
+# dput(names((simplex_des)))
+## Vector of categorical variables that need transformation
+catVars <- c( "LIVING_","MAINTENANCE_CNI_", "MAINTENANCE_MPS_MMF_", "MAINTENANCE_MTOR_", "MAINTENANCE_AZA_", 
+ "MAINTENANCE_SRD_", "ARE_01", "type")
+## Create a variable list.
+vars <- c( "MONTHS", "DFG_", "LIVING_", "MAINTENANCE_CNI_",
+"MAINTENANCE_MPS_MMF_", "MAINTENANCE_MTOR_", "MAINTENANCE_AZA_", 
+"REC_PROT_", "MAINTENANCE_SRD_", "DON_AGE_", "REC_AGE_", "CIT_", 
+"PRA1_", "PRA2_", "RANK_", "ARE_01")
+tableOne <- CreateTableOne(vars = vars, strata = "type",factorVars = catVars, data = simplex_des_last_visite)
+tableOne2<-print(tableOne, nonnormal = c("MONTHS", "DFG_", "REC_PROT_", "DON_AGE_", "REC_AGE_", "CIT_", 
+"PRA1_", "PRA2_", "RANK_"), printToggle=F, minMax=T)
+tableOne2b<-print(tableOne, nonnormal = c("MONTHS", "DFG_", "REC_PROT_", "DON_AGE_", "REC_AGE_", "CIT_", 
+"PRA1_", "PRA2_", "RANK_"), printToggle=F, minMax=F)
+
+```
+
+```{r , echo=F}
+kableone(tableOne2)
+kableone(tableOne2b)
+```
+
+Extraction of the patients with the 10% steepest slope from the LSTM validation dataset
+
+
+```{r}
+slope_base_valid %>% ungroup() %>%  reframe(bias_quant_steepest_slope = quantile(slope, c(0,0.25, 0.5, 0.75,1), na.rm=TRUE), q = c(0,0.25, 0.5, 0.75,1))
+slope_base_valid %>% ungroup() %>%  reframe(bias_quant_steepest_slope = quantile(slope, c(0,0.1), na.rm=TRUE), q = c(0,0.1))
+```
+We keep the patients with a realtive slope between -0.48 et -0.15%

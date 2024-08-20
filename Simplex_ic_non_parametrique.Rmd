@@ -1,0 +1,722 @@
+---
+title: "Simplex_IC_non parametrique"
+author: "jbw"
+date: "2024-08-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Loading of the data
+
+```{r}
+### reouverture fichier
+library(tidyverse)
+library(viridis)
+final_data <- read_csv("final_file_all_test_patient120824.csv", na = c("", "NA", -100))
+combined_data2 <-read_csv("combined_data_epalin_data120824.csv", na = c("", "NA", -100)) %>% arrange(don_age)
+
+```
+
+# # Distribution of the simplex corpus
+
+Histogram plot
+
+```{r}
+# dsitribution histogramme simplex
+final_data %>% filter(number=='000') %>% ggplot(aes(x = true_eGFR)) + 
+  geom_histogram() +
+  theme_bw() + labs(x = "true eGFR corpus ml/min/1.73m²")
+ggsave("Figure2_hist_egfr_corpus_simplex.pdf")
+
+```
+
+### Statistical Description of the SimplEx Corpus for Table 1
+
+```{r}
+
+
+# Step 1: Filter the final data to include only records where 'number' equals '000'
+# and create a new corpus dataset. The CNI and SRD variables are transformed into 
+# binary variables (1 if greater than 0, otherwise 0).
+
+corpus_examples <- final_data %>%
+  filter(number == '000') %>%        # Filter for rows where 'number' is '000'
+  mutate(
+    CNI = if_else(CNI > 0, 1, 0),    # Convert CNI to binary (1 if > 0, else 0)
+    SRD = if_else(SRD > 0, 1, 0)     # Convert SRD to binary (1 if > 0, else 0)
+  )
+
+# Step 2: Calculate the interquartile range (IQR) for the true eGFR values within the filtered corpus.
+# The summary includes the 0th (min), 25th, 50th (median), 75th, and 100th (max) percentiles.
+
+final_data %>%
+  filter(number == '000') %>%        # Filter for rows where 'number' is '000'
+  summarise(
+    quantile_true_eGFR_corpus = quantile(true_eGFR, c(0, 0.25, 0.5, 0.75, 1)),  # Calculate the quantiles (IQR)
+    q = c(0, 0.25, 0.5, 0.75, 1),    # Specify the quantiles for reference
+    n = n()                          # Count the number of observations in the corpus
+  )
+
+
+```
+
+## Tableone corpus
+
+```{r}
+#recuperation des noms
+# dput(names((corpus_examples)))
+library(tableone)
+## Vector of categorical variables that need transformation
+catVars <- c("living","CNI", "MMF_MPS", "MTOR", "AZA",  "SRD",  "ARE01")
+## Create a variable list.
+vars <- c("living","CNI", "MMF_MPS", "MTOR", "AZA", "rec_prot", "SRD", "don_age", 
+          "rec_age", "CIT", "PRA1", "PRA2", "RANK", "ARE01", "true_eGFR", 
+          "hat_eGFR")
+tableOne <- CreateTableOne(vars = vars, factorVars = catVars, data = corpus_examples)
+tableOne2<-print(tableOne, nonnormal = c("rec_prot",  "don_age","rec_age", "CIT", "PRA1", "PRA2", "RANK", "true_eGFR", "hat_eGFR"), printToggle=F, minMax=T)
+tableOne2b<-print(tableOne, nonnormal = c("rec_prot",  "don_age","rec_age", "CIT", "PRA1", "PRA2", "RANK", "true_eGFR", "hat_eGFR"), printToggle=F, minMax=F)
+
+kableone(tableOne2)
+kableone(tableOne2b)
+```
+
+## Weighted quantiles
+
+```{r}
+## Weighted Quantiles Calculation
+
+# Load the necessary library for weighted quantiles
+library(reldist)
+
+# Step 1: Group the final data by 'number' and filter the dataset to include only records
+# where the 'weight' is greater than 2.5% (0.025).
+final_quant_res <- final_data %>% 
+  group_by(number) %>%                    # Group data by 'number'
+  
+  # Filter for records with 'weight' greater than 0.025 (2.5%)
+  filter(weight > 0.025) %>%
+  
+  # Step 2: Calculate weighted quantiles for the 'true_eGFR' variable.
+  # The quantiles are calculated at 0%, 5%, 25%, 50%, 75%, 95%, and 100% levels.
+  reframe(
+    wquant_true_egfr = wtd.quantile(
+      x = true_eGFR,                      # The variable for which quantiles are calculated
+      q = c(0, 0.05, 0.25, 0.5, 0.75, 0.95, 1),  # Quantile levels
+      na.rm = TRUE,                       # Remove missing values before calculating
+      weight = weight                     # Use 'weight' as the weighting variable
+    ), 
+    n = n()                               # Count the number of observations
+  ) %>%
+  
+  # Step 3: Add a column for the quantile levels for easier reference
+  mutate(
+    quant = rep(c(0, 0.05, 0.25, 0.5, 0.75, 0.95, 1), times = 400)  # Repeat quantile levels
+  ) %>%
+  
+  # Step 4: Merge the quantile results with another dataset (combined_data2)
+  # This join adds additional columns from 'combined_data2' to the quantile results
+  left_join(combined_data2) %>% 
+  
+  # Step 5: Select and organize the relevant columns for the final output
+  select(
+    number,                               # Retain the 'number' column
+    wquant_true_egfr,                     # Retain the calculated weighted quantiles
+    quant,                                # Retain the quantile levels
+    hat_eGFR,                             # Predicted eGFR values
+    true_eGFR,                            # Actual true eGFR values
+    n                                     # Number of observations
+  ) %>%
+  
+  # Step 6: Reshape the data from long to wide format so that each quantile level becomes
+  # a separate column with the corresponding weighted quantile values.
+  pivot_wider(
+    names_from = quant,                   # Use quantile levels as the names of new columns
+    names_prefix = "quant",               # Prefix these new columns with "quant"
+    values_from = wquant_true_egfr        # Populate these columns with the weighted quantile values
+  )
+
+```
+
+## Example patient Figure 3
+
+```{r}
+# number_ex <- final_quant_res %>% filter(between(true_eGFR,21, 25))
+
+# presentaiton of 149 as excmple
+final_data %>% filter(number =="149") %>% 
+  mutate(CNI = if_else(CNI>0,1,0),
+         SRD= if_else(SRD>0,1,0)) %>% 
+  filter(weight>0.025)
+
+combined_data2 %>% filter(number =="149")
+```
+
+
+## Graphical Representation for All Patients: Simplex Range as a Function of Predicted - True eGFR
+
+```{r}
+
+# Load necessary libraries
+library(ggplot2)
+library(viridis)
+
+# Create a scatter plot using ggplot2
+ggplot(
+  final_quant_res %>% 
+    mutate(simplex_range = quant1 - quant0),  # Calculate the Simplex range (difference between 1st and 0th quantiles)
+  aes(y = simplex_range, x = hat_eGFR - true_eGFR)  # Map the Simplex range to the y-axis and (pred - true eGFR) to the x-axis
+) +
+  geom_point(aes(size = 1), alpha = 0.5, show.legend = FALSE) +  # Plot each point with slight transparency and no legend
+  # geom_errorbar(                                             # (Optional) Uncomment to add error bars for each point
+  #   aes(ymin = quant0 - true_eGFR, ymax = quant1 - true_eGFR), # Define the lower and upper limits of the error bars
+  #   width = 0.2,                                              # Set the width of the error bars
+  #   alpha = 0.3                                               # Set the transparency of the error bars
+  # ) +
+  scale_color_viridis() +  # Use the Viridis color scale for a perceptually uniform color scheme
+  geom_vline(xintercept = 0, color = "blue") +  # Add a vertical line at x = 0 to indicate where predicted = true eGFR
+  theme_bw() +  # Apply a clean black-and-white theme to the plot
+  geom_text(
+    aes(label = number),  # Annotate each point with its corresponding patient number
+    vjust = -0.5,         # Adjust the vertical position of the labels
+    hjust = 0.5,          # Adjust the horizontal position of the labels
+    alpha = 0.5           # Set the transparency of the labels
+  ) +
+  labs(
+    x = "Predicted - True eGFR (ml/min)",  # Label for the x-axis
+    y = "Simplex Range",                   # Label for the y-axis
+    size = ""                              # Title for the size aesthetic (left empty as it’s not needed)
+  )
+
+# Save the plot to a PDF file
+ggsave("volcanoplot_simplex_range_vs_pred-true_egfr.pdf")
+
+
+```
+
+
+## Graphical Representation: Scatterplot of Residuals vs. True eGFR with Identity Line (Figure 4)
+
+```{r}
+
+
+
+# Create a scatter plot with error bars and an identity line
+ggplot(final_quant_res, aes(x = true_eGFR, y = hat_eGFR - true_eGFR)) +
+  geom_point(aes(size = 1), alpha = 0.5, show.legend = FALSE) +  # Scatter plot points with slight transparency and no legend
+  
+  # Add error bars to represent the range between quant0 and quant1 relative to true eGFR
+  geom_errorbar(
+    aes(ymin = quant0 - true_eGFR, ymax = quant1 - true_eGFR),  # Error bars based on the Simplex range (quant0 to quant1)
+    width = 0.2,            # Set the width of the error bars
+    alpha = 0.3             # Set the transparency of the error bars
+  ) +
+  
+  scale_color_viridis() +   # Use the Viridis color scale for a visually accessible color scheme
+  
+  geom_hline(yintercept = 0, color = "blue") +  # Add a horizontal blue line at y = 0 (identity line), where predicted eGFR equals true eGFR
+  
+  theme_bw() +              # Apply a clean black-and-white theme to the plot
+  
+  # Add patient labels to the points
+  geom_text(
+    aes(label = number),    # Annotate each point with its corresponding patient number
+    vjust = -0.5,           # Adjust the vertical position of the labels
+    hjust = 0.5,            # Adjust the horizontal position of the labels
+    alpha = 0.5             # Set the transparency of the labels
+  ) +
+  
+  # Label the axes
+  labs(
+    y = "Predicted - True eGFR (ml/min)",  # Label for the y-axis
+    x = "True eGFR",                       # Label for the x-axis
+    size = ""                              # Title for the size aesthetic (left empty as it’s not needed)
+  )
+
+# Save the plot as a PDF file
+ggsave("Figure4_all_patients_corpus_ci_pred-true_vs_true_gfr.pdf")
+
+```
+
+## Calculation of the Number of Patients with Predictions Within the Interval
+
+```{r}
+
+
+# Step 1: Create a new column 'pred_interval' that indicates whether the true eGFR
+# is within the Simplex range (between quant0 and quant1).
+final_quant_res %>%
+  mutate(
+    pred_interval = if_else(
+      between(true_eGFR, quant0, quant1),  # Check if true eGFR is within the range [quant0, quant1]
+      1,                                   # If true eGFR is within the interval, set pred_interval to 1
+      0                                    # If not, set pred_interval to 0
+    )
+  ) %>%
+  
+  # Step 2: Calculate the proportion of patients whose true eGFR is within the predicted interval
+  summarise(
+    prop_cible = mean(pred_interval == 1)  # Calculate the mean of 'pred_interval == 1' to get the proportion
+  )
+
+```
+
+## Extraction of Patients Outside the Interval to Evaluate Distance to the Nearest Bound (Q0, Q1, Q2, Q3, and Q4)
+
+```{r}
+# Step 1: Identify patients whose true eGFR falls outside the Simplex-predicted interval
+distance_simplex_true_patients_out <- final_quant_res %>%
+  mutate(
+    pred_interval = ifelse(
+      between(true_eGFR, quant0, quant1),  # Check if true eGFR is within the range [quant0, quant1]
+      1,                                   # If true eGFR is within the interval, set pred_interval to 1
+      0                                    # If not, set pred_interval to 0
+    )
+  ) %>%
+  filter(pred_interval == 0) %>%            # Filter to keep only patients whose true eGFR is outside the interval
+  
+  # Step 2: Calculate the distance from the true eGFR to the closest boundary of the Simplex interval
+  mutate(
+    distance_corpus = pmax(
+      true_eGFR - quant1,                  # Calculate the distance to the upper bound (quant1)
+      quant0 - true_eGFR,                  # Calculate the distance to the lower bound (quant0)
+      0                                    # Ensure the distance is non-negative
+    )
+  )
+
+# Step 3: Compute the distribution of the minimum distance to the Simplex bounds for patients outside the interval
+distance_simplex_true_patients_out %>%
+  reframe(
+    min_distance_quant = quantile(         # Calculate quantiles of the distance to the nearest bound
+      distance_corpus,                     # Use the calculated distances from the previous step
+      c(0, 0.25, 0.5, 0.75, 1)             # Calculate the 0th, 25th, 50th, 75th, and 100th percentiles
+    ),
+    q = c(0, 0.25, 0.5, 0.75, 1)           # Specify the corresponding quantiles for reference
+  )
+
+```
+
+Graphical representation only for patients with true eGFR out of simplex: distance to the closest value of simplex min or max as functon of the diff between true and pred eGFR (non presented in the article)
+
+```{r}
+ggplot(distance_simplex_true_patients_out, aes(y = distance_corpus , x = hat_eGFR - true_eGFR)) +
+  geom_point(aes(size=1),alpha=0.5, show.legend = FALSE) +  # Scatter plot points
+  # geom_errorbar(
+  #   aes(ymin = quant0 - true_eGFR , ymax = quant1 - true_eGFR),
+  #   width = 0.2,
+  #   alpha = 0.3# Adjust the width of the error bars as needed
+  #   # position = position_dodge(0.5)  # Adjust the position if needed
+  # ) +
+  scale_color_viridis() +
+  geom_vline(xintercept = 0, color = "blue") +
+  theme_bw() +
+  geom_text(
+    aes(label = number),
+    vjust = -0.5,  # Adjust the vertical position of labels
+    hjust = 0.5,# Adjust the horizontal position of labels
+    alpha = 0.5
+  ) +
+  labs(x = "pred - true eGFR (ml/min)", y = "Min. distance between true eGFR and Simplex",
+       size="")
+
+ggsave("patients_out_corpus_distance_simplex_vs_residual.pdf")
+
+```
+
+
+
+
+
+```{r}
+# ## representaiotn with id as x min max
+# # Create the scatter plot with intervals
+# set.seed(12345)
+# final_quant_res %>% 
+#   # slice_sample(n=20) %>% 
+#   ggplot(aes(x = as.numeric(number) , y =  hat_eGFR - true_eGFR, color = true_eGFR )) +
+#   geom_point(
+#     alpha=0.5, 
+#     size = 3, 
+#     show.legend = FALSE) +  # Scatter plot points
+#   geom_errorbar(
+#     aes(ymin = quant0 - true_eGFR , ymax = quant1- true_eGFR, color = true_eGFR),
+#     width = 3,
+#     alpha = 0.5# Adjust the width of the error bars as needed
+#     # position = position_dodge(0.5)  # Adjust the position if needed
+#   ) +
+#   scale_color_viridis() +
+#   # geom_abline(intercept = 0, slope=1, color = "blue") +
+#   theme_bw() +
+#   # theme(legend.position="none")+
+#   # geom_text(
+#   #   aes(label = number),
+#   #   vjust = -0.5,  # Adjust the vertical position of labels
+#   #   hjust = 0.5,# Adjust the horizontal position of labels
+#   #   alpha = 0.4
+#   # ) +
+#   labs(x = "ID", y = "pred eGFR - true eGFR",
+#        color = "true GFR", size="")
+# 
+# ggsave("all_patients_corpus_ci_true_gfr.pdf")
+
+```
+
+## Identify Patients with Poor Prediction (Absolute Difference in GFR > 10) (not presented in the article)
+
+```{r}
+
+
+# Step 1: Calculate the absolute difference between predicted and true eGFR for each patient
+# Then, arrange the patients in descending order based on this difference and filter to keep
+# only those with a difference greater than 10.
+bad_predicted_patients <- final_quant_res %>%
+  mutate(dif_gfr_abs = abs(hat_eGFR - true_eGFR)) %>%  # Calculate absolute difference between predicted and true eGFR
+  arrange(desc(dif_gfr_abs)) %>%                       # Sort patients by the magnitude of the difference
+  filter(dif_gfr_abs > 10)                             # Filter to keep patients where the difference is greater than 10
+
+```
+
+## Analyze the Corpus's Ability to Aid in Understanding Poor Predictions
+
+```{r}
+
+
+bad_predicted_patients %>%
+  # Optionally exclude patients whose true eGFR is already within the Simplex interval
+  # filter(!between(true_eGFR, quant0, quant1)) %>%
+
+  # Step 1: Calculate the distance to the nearest boundary of the Simplex interval for these poorly predicted patients
+  mutate(distance_corpus = pmax(true_eGFR - quant1, quant0 - true_eGFR, 0)) %>% 
+
+  # Step 2: Calculate quantiles of the minimum distance to the Simplex interval bounds
+  reframe(
+    min_distance_quant = quantile(distance_corpus, c(0, 0.25, 0.5, 0.75, 1)),  # Quantile distribution of distances
+    q = c(0, 0.25, 0.5, 0.75, 1)                                               # Specify quantiles for reference
+  )
+
+
+```
+## Evaluate whether the corpus brings the prediction closer to the true value
+
+The goal of this analysis is to evaluate whether the Simplex corpus can help improve the accuracy of predictions, specifically by checking if the absolute difference between the lower (or upper) bound of the corpus and the true eGFR is smaller than the absolute difference between the predicted eGFR (hat_eGFR) and the true eGFR (true_eGFR).
+
+```{r}
+bad_predicted_patients %>%
+  # Step 1: Calculate the differences between the predicted and true eGFR, as well as between the corpus bounds (quant0, quant1) and the true eGFR
+  mutate(
+    dif_gfr = hat_eGFR - true_eGFR,            # Calculate the difference between predicted and true eGFR
+    dif_quant0_true = quant0 - true_eGFR,      # Calculate the difference between the lower bound (quant0) and true eGFR
+    dif_quant1_true = quant1 - true_eGFR       # Calculate the difference between the upper bound (quant1) and true eGFR
+  ) %>%
+  
+  # Step 2: Determine if the corpus brings the prediction closer to the true value
+  # This checks if the difference between the true eGFR and any of the corpus bounds (quant0, quant1)
+  # is smaller than the difference between the predicted eGFR and the true eGFR
+  mutate(
+    corpus_rapporche_pred_0 = case_when(
+      abs(dif_quant0_true) < abs(dif_gfr) | abs(dif_quant1_true) < abs(dif_gfr) ~ 1,  # Set to 1 if the corpus improves the prediction
+      TRUE ~ 0  # Set to 0 otherwise
+    )
+  ) %>%
+  
+  # Step 3: Summarize the proportion of cases where the corpus improves the prediction accuracy
+  summarise(
+    raprroche_pred0 = mean(corpus_rapporche_pred_0 == 1),  # Calculate the proportion where the corpus improves accuracy
+    somme0 = sum(corpus_rapporche_pred_0),  # Count the total number of cases where the corpus improved the prediction
+    n = n()  # Count the total number of observations
+  )
+
+
+```
+
+plot for these patients
+
+```{r}
+
+bad_predicted_patients %>% 
+  ggplot(aes(x = as.numeric(number) , y =  hat_eGFR - true_eGFR, color = true_eGFR )) +
+  geom_point(
+    # alpha=0.5, 
+    size = 3, 
+    show.legend = FALSE) +  # Scatter plot points
+  geom_errorbar(
+    aes(ymin = quant0 - true_eGFR , ymax = quant1 - true_eGFR, color = true_eGFR),
+    width = 3
+    # alpha = 0.5# Adjust the width of the error bars as needed
+    # position = position_dodge(0.5)  # Adjust the position if needed
+  ) +
+  scale_color_viridis() +
+  # geom_abline(intercept = 0, slope=1, color = "blue") +
+  theme_bw() +
+  # theme(legend.position="none")+
+  # geom_text(
+  #   aes(label = number),
+  #   vjust = -0.5,  # Adjust the vertical position of labels
+  #   hjust = 0.5,# Adjust the horizontal position of labels
+  #   alpha = 0.4
+  # ) +
+  labs(x = "ID", y = "pred eGFR - true eGFR",
+       color = "true GFR", size="")
+ggsave("patients_badly_predicted_lstm_ht10_mlmin.pdf")
+```
+
+## Analysis of Patients with GFR < 30 mL/min (Not Presented in Main Article)
+
+```{r}
+# Step 1: Filter patients with true eGFR < 30 mL/min and save the dataset
+patient_inf_30 <- final_quant_res %>% 
+  filter(true_eGFR < 30)  # Filter for patients with true eGFR < 30 mL/min
+
+write.csv(patient_inf_30, file = "patient_inf_30.csv")  # Save the filtered data to a CSV file
+
+# Step 2: Calculate the proportion of patients with true eGFR < 30 mL/min whose values fall within the Simplex-predicted interval
+patient_inf_30 %>%
+  mutate(
+    pred_interval = ifelse(
+      between(true_eGFR, quant0, quant1),  # Check if true eGFR is within the Simplex interval [quant0, quant1]
+      1,                                   # Set pred_interval to 1 if within the interval
+      0                                    # Set pred_interval to 0 if outside the interval
+    )
+  ) %>%
+  summarise(
+    prop_cible = mean(pred_interval == 1),  # Proportion of patients with true eGFR within the interval
+    n = n()                                 # Total number of patients
+  )
+
+# Step 3: Create a scatter plot showing the prediction error (predicted - true eGFR) for patients with true eGFR < 30 mL/min
+patient_inf_30 %>% 
+  ggplot(aes(x = as.numeric(number), y = hat_eGFR - true_eGFR, color = true_eGFR)) +
+  geom_point(size = 3, show.legend = FALSE) +  # Scatter plot points with adjusted size
+  geom_errorbar(
+    aes(ymin = quant0 - true_eGFR, ymax = quant1 - true_eGFR, color = true_eGFR),  # Error bars representing the Simplex interval
+    width = 3
+  ) +
+  scale_color_viridis() +  # Apply the Viridis color scale
+  theme_bw() +  # Apply a clean black-and-white theme
+  labs(
+    x = "ID", y = "Predicted eGFR - True eGFR",  # Label axes
+    color = "True GFR", size = ""
+  )
+
+ggsave("patients_true_gfr_lt30mlmin.pdf")  # Save the plot as a PDF file
+
+# Step 4: Analyze the distribution of the distance to the Simplex interval bounds for patients with true eGFR < 30 mL/min who are outside the interval
+patient_inf_30 %>%
+  mutate(
+    pred_interval = ifelse(
+      between(true_eGFR, quant0, quant1),  # Check if true eGFR is within the Simplex interval [quant0, quant1]
+      1,                                   # Set pred_interval to 1 if within the interval
+      0                                    # Set pred_interval to 0 if outside the interval
+    )
+  ) %>%
+  filter(pred_interval == 0) %>%  # Filter to keep only patients whose true eGFR is outside the interval
+  mutate(
+    distance_corpus = pmax(true_eGFR - quant1, quant0 - true_eGFR, 0)  # Calculate distance to the nearest bound of the Simplex interval
+  ) %>%
+  reframe(
+    min_distance_quant = quantile(abs(distance_corpus), c(0, 0.25, 0.5, 0.75, 1)),  # Calculate quantiles of these distances
+    q = c(0, 0.25, 0.5, 0.75, 1)  # Specify quantiles for reference
+  )
+```
+
+### A posteriori evaluation of patients with the steepest slope
+
+A Posteriori Evaluation of Patients with the Steepest Slope
+This section evaluates patients who experienced the steepest declines in GFR, calculated as the slope between month 12 and month 24 values.
+
+Variation in GFR is calculated as : slope = (month_12 - month_24)/month_24 ) 
+eg if gfr12=60 and gfr24=30, slope = 60-30/30 = 1
+A positive slope indicates a steep decline in GFR over 12 months.
+
+```{r}
+## Step 1: Load and clean the slope data
+# Load the dataset 'slope_base_valid_120824.csv' which contains slope information for the validation set
+library(readr)
+
+slope_base_valid <- read_csv("slope_base_valid_120824.csv", 
+    col_types = cols(...1 = col_skip())) %>%  # Skip the first unnamed column (not needed)
+    distinct(don_age, rec_age, CIT, .keep_all = TRUE)  # Remove duplicate rows based on donor age, recipient age, and CIT
+
+# Step 2: Join slope data with the main dataset
+number_slope <- combined_data2 %>% 
+    left_join(slope_base_valid) %>%  # Join the slope data with the main dataset on matching columns
+    select(number, slope)  # Select only the 'number' (patient ID) and 'slope' columns
+
+# Step 3: Check for duplicates in the 'number' column
+number_slope$number[duplicated(number_slope$number)]  # Identify any duplicated patient numbers
+
+
+# Step 4: Identify the top 40 patients with the steepest declines in GFR
+first_quartile_patients_highgest_decrease_gfr <- final_quant_res %>% 
+    left_join(number_slope) %>%  # Merge the slope data with the final results dataset
+    arrange(desc(slope)) %>%  # Sort the patients by the steepest slope in descending order
+    slice_head(n = 40)  # Select the top 40 patients with the steepest declines
+
+```
+
+
+## Proportion of Patients with the Steepest Slope Whose True eGFR Falls Within the Simplex Interval
+
+This analysis evaluates how well the Simplex-predicted interval captures the true eGFR values for patients who experienced the steepest declines in kidney function (i.e., those in the first quartile of the steepest slopes).
+
+```{r}
+
+# Step 1: Identify whether the true eGFR for each patient falls within the Simplex-predicted interval
+first_quartile_patients_highgest_decrease_gfr %>%
+  mutate(
+    pred_interval = ifelse(
+      between(true_eGFR, quant0, quant1),  # Check if true eGFR is within the Simplex interval [quant0, quant1]
+      1,                                   # Set pred_interval to 1 if within the interval
+      0                                    # Set pred_interval to 0 if outside the interval
+    )
+  ) %>%
+  
+  # Step 2: Calculate the proportion of patients whose true eGFR falls within the Simplex interval
+  summarise(
+    prop_cible = mean(pred_interval == 1),  # Proportion of patients with true eGFR within the interval
+    n = n()                                 # Total number of patients evaluated
+  )
+
+```
+## Figure 5: Prediction Error vs. True eGFR for Patients with the Steepest Slope
+
+This plot visualizes the prediction error (predicted eGFR - true eGFR) for patients in the first quartile of those with the steepest declines in GFR. It includes error bars representing the Simplex-predicted interval and is presented as Figure 5 in the article.
+
+```{r}
+first_quartile_patients_highgest_decrease_gfr %>%
+  ggplot(aes(x = true_eGFR, y = hat_eGFR - true_eGFR)) +  # Plot prediction error vs. true eGFR
+  geom_point(
+    alpha = 0.5,  # Set the transparency of points
+    size = 3,     # Set the size of points
+    show.legend = FALSE  # Do not show legend
+  ) +  
+  geom_errorbar(
+    aes(ymin = quant0 - true_eGFR, ymax = quant1 - true_eGFR),  # Error bars showing Simplex interval
+    width = 3,    # Set the width of the error bars
+    alpha = 0.5   # Set the transparency of error bars
+  ) +
+  scale_color_viridis() +  # Apply the Viridis color scale
+  geom_hline(yintercept = 0, linetype = 3) +  # Add a horizontal dashed line at y = 0 (zero prediction error)
+  theme_bw() +  # Apply a clean black-and-white theme
+  labs(
+    x = "True GFR",  # Label for the x-axis
+    y = "Predicted eGFR - True eGFR",  # Label for the y-axis
+    size = ""  # Label for size (not used, so it's left empty)
+  )
+
+ggsave("Figure5_patients_first_quartile_highest_decrease.pdf")  # Save the plot as a PDF file
+
+```
+
+## Distribution of Distance to Corpus for Patients with the Steepest Slope Not Within the Simplex Interval
+
+This analysis focuses on patients with the steepest declines in GFR (i.e., those in the first quartile of the steepest slopes) whose true eGFR values do not fall within the Simplex-predicted interval. The goal is to examine how far off these values are from the predicted bounds.
+
+```{r}
+# Step 1: Identify whether the true eGFR for each patient falls within the Simplex-predicted interval
+first_quartile_patients_highgest_decrease_gfr %>%
+  mutate(
+    pred_interval = ifelse(
+      between(true_eGFR, quant0, quant1),  # Check if true eGFR is within the Simplex interval [quant0, quant1]
+      1,                                   # Set pred_interval to 1 if within the interval
+      0                                    # Set pred_interval to 0 if outside the interval
+    )
+  ) %>%
+  
+  # Step 2: Filter out patients whose true eGFR falls within the Simplex interval
+  filter(pred_interval == 0) %>%  # Keep only those patients whose true eGFR is outside the predicted interval
+  
+  # Step 3: Calculate the distance from the true eGFR to the nearest boundary of the Simplex interval
+  mutate(
+    distance_corpus = pmax(true_eGFR - quant1, quant0 - true_eGFR, 0)  # Compute the distance to the closest interval bound
+  ) %>%
+  
+  # Step 4: Calculate the quantiles of the distances
+  reframe(
+    min_distance_quant = quantile(abs(distance_corpus), c(0, 0.25, 0.5, 0.75, 1)),  # Calculate the 0th, 25th, 50th, 75th, and 100th percentiles of the distances
+    q = c(0, 0.25, 0.5, 0.75, 1)  # Specify the quantile levels for reference
+  )
+
+```
+
+## Analysis of Patients with Prediction Bias Greater Than 10% (Not Presented in Main Article)
+
+This analysis filters out patients from the Simplex corpus who have a prediction bias (predicted eGFR vs. true eGFR) greater than 10%. It then recalculates the weighted quantiles, assesses how many patients have true eGFR within the interval, and evaluates the distance for those outside the interval. Finally, a graphical representation is created for patients whose true eGFR is outside the predicted range.
+
+```{r}
+# Load necessary library for weighted quantiles
+library(reldist)
+
+# Step 1: Filter out patients from the corpus with a prediction bias greater than 10%
+final_quant_res_filtered <- final_data %>% 
+  group_by(number) %>% 
+  # Calculate relative bias between predicted and true eGFR
+  mutate(bias_rel = (hat_eGFR - true_eGFR) / true_eGFR) %>% 
+  # Filter out patients with a bias greater than 10%
+  filter(abs(bias_rel) < 0.1) %>%
+  # Further filter to include only patients with a weight greater than 1%
+  filter(weight > 0.01) %>%
+  # Recalculate weighted quantiles for the filtered data
+  reframe(
+    wquant_true_egfr = wtd.quantile(x = true_eGFR, q = c(0, 0.25, 0.5, 0.75, 1), na.rm = TRUE, weight = weight), 
+    n = n()
+  ) %>%
+  # Add quantile labels
+  mutate(quant = rep(c(0, 0.25, 0.5, 0.75, 1), times = 390)) %>%
+  # Join with additional data from combined_data2
+  left_join(combined_data2) %>% 
+  # Select relevant columns for further analysis
+  select(number, wquant_true_egfr, quant, hat_eGFR, true_eGFR, n) %>%
+  # Reshape the data from long to wide format based on quantiles
+  pivot_wider(names_from = quant, names_prefix = "quant", values_from = wquant_true_egfr)
+
+# Step 2: Calculate the proportion of patients whose true eGFR falls within the recalculated Simplex interval
+final_quant_res_filtered %>%
+  mutate(pred_interval = ifelse(between(true_eGFR, quant0, quant1), 1, 0)) %>%
+  summarise(prop_cible = mean(pred_interval == 1))
+
+# Step 3: Extract patients whose true eGFR is outside the recalculated Simplex interval and evaluate distances
+distance_simplex_true_patients_out_filtered <- final_quant_res_filtered %>% 
+  mutate(pred_interval = ifelse(between(true_eGFR, quant0, quant1), 1, 0)) %>%
+  filter(pred_interval == 0) %>%
+  # Calculate distance to the nearest bound of the Simplex interval
+  mutate(
+    dif_min = true_eGFR - quant0, 
+    diff_max = true_eGFR - quant1, 
+    min_distance = pmin(abs(diff_max), abs(dif_min)), 
+    dif_median = true_eGFR - quant0.5
+  )
+
+# Calculate the distribution of distances to the nearest Simplex interval bound
+distance_simplex_true_patients_out_filtered %>%
+  reframe(
+    min_distance_quant = quantile(min_distance, c(0, 0.25, 0.5, 0.75, 1)), 
+    q = c(0, 0.25, 0.5, 0.75, 1)
+  )
+
+# Step 4: Graphical representation of the distance to the nearest Simplex bound for patients with true eGFR outside the Simplex interval
+ggplot(distance_simplex_true_patients_out_filtered, aes(y = min_distance, x = hat_eGFR - true_eGFR)) +
+  geom_point(aes(size = 1), alpha = 0.5, show.legend = FALSE) +  # Scatter plot points
+  scale_color_viridis() +
+  geom_vline(xintercept = 0, color = "blue") +  # Add a vertical line at x = 0 (no prediction error)
+  theme_bw() +
+  geom_text(
+    aes(label = number),
+    vjust = -0.5,  # Adjust the vertical position of labels
+    hjust = 0.5,   # Adjust the horizontal position of labels
+    alpha = 0.5    # Set the transparency of labels
+  ) +
+  labs(
+    x = "Predicted - True eGFR (ml/min)",  # Label for the x-axis
+    y = "Min. Distance Between True eGFR and Simplex",  # Label for the y-axis
+    size = ""
+  )
+# Save the plot
+ggsave("patients_outside_simplex_min_distance_vs_pred_error.pdf")
+
+```
+
+
+
